@@ -250,4 +250,22 @@ satiation survey; tune `tauSq` to match the noise of your measurement channel.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Copyright (c) 2026 JustSeven Team. This project is released under the
+[Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/)
+license — see [LICENSE](./LICENSE) for the full legal text.
+
+**Allowed** — no further permission needed:
+
+- Academic research, teaching, and learning
+- Personal or non-commercial evaluation, experimentation, and development
+- Non-commercial redistribution with attribution
+
+**Strictly prohibited**:
+
+- Any commercial use — selling, SaaS hosting, or embedding this library in a
+  paid product
+- Enterprise integration or use within a for-profit organization's services
+- For-profit derivative works or commercial services built on this library
+
+Commercial use requires a separate commercial license — please contact the
+authors to obtain one.
