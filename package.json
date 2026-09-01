@@ -2,7 +2,7 @@
   "name": "justseven-core",
   "version": "0.1.0",
   "description": "Pure-TypeScript nutritional-intelligence engine: BMR (Mifflin-St Jeor), HFS dual-constraint portion recommendation, and Bayesian/Kalman incremental personal calibration.",
-  "license": "MIT",
+  "license": "CC-BY-NC-4.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
