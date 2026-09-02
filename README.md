@@ -39,20 +39,20 @@ loop: recommend → eat → report → recalibrate.
                         └──────────────┬──────────────┘
                                        ▼
    ┌───────────────────────────────────────────────────────┐
-   │ Algorithm 0 — BMR & meal budget           (src/bmr.ts) │
-   │   BMR = Mifflin-St Jeor                                 │
-   │   E_meal = BMR × G × μ_meal (band ±5%, cap 100 kcal)    │
+   │ Algorithm 0 — BMR & meal budget           (src/bmr.ts)│
+   │   BMR = Mifflin-St Jeor                               │
+   │   E_meal = BMR × G × μ_meal (band ±5%, cap 100 kcal)  │
    └───────────────────────┬───────────────────────────────┘
                            ▼ E_target
    ┌───────────────────────────────────────────────────────┐
    │ Algorithm I — plate geometry            (src/geometry)│
-   │   area ratios → volume scores → mass & macro totals    │
+   │   area ratios → volume scores → mass & macro totals   │
    └───────────────────────┬───────────────────────────────┘
                            ▼ E_total, macros
    ┌───────────────────────────────────────────────────────┐
    │ Algorithm II — HFS dual-constraint advice (src/hfs.ts)│
    │   r_E (energy)   ┐                                    │
-   │   r_H (fullness) ┴─ fuse → r_base → flexible quota     │
+   │   r_H (fullness) ┴─ fuse → r_base → flexible quota    │
    └───────────────────────┬───────────────────────────────┘
                            ▼ recommended portion / quota
    ┌───────────────────────────────────────────────────────┐
@@ -101,8 +101,7 @@ produce unusably wide recommendations.
 When a vision model supplies bounding boxes (and optionally a rough mass
 prior), the plate is reconstructed geometrically:
 
-1. **Projection area** — each component's bbox area ratio to the plate:
-   $\text{AreaRatio}_i = \text{Area}_i / \text{Area}_{\text{plate}}$.
+1. **Projection area** — each component's bbox area ratio to the plate: $\text{AreaRatio}\_i = \text{Area}\_i / \text{Area}\_{\text{plate}}$.
 2. **Volume score** — $V_i = K_i \times \text{AreaRatio}_i \times H_i$
    (per-category form factor × area × height), normalized to shares
    $\omega_i = V_i / \sum V_j$.
