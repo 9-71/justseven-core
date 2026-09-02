@@ -96,6 +96,29 @@ variability; the band span is capped at 100 kcal so extreme BMRs do not
 produce unusably wide recommendations.
 
 ---
+## Algorithm I — plate geometry estimation (`src/geometry.ts`)
+
+When a vision model supplies bounding boxes (and optionally a rough mass
+prior), the plate is reconstructed geometrically:
+
+1. **Projection area** — each component's bbox area ratio to the plate:
+   $\text{AreaRatio}_i = \text{Area}_i / \text{Area}_{\text{plate}}$.
+2. **Volume score** — $V_i = K_i \times \text{AreaRatio}_i \times H_i$
+   (per-category form factor × area × height), normalized to shares
+   $\omega_i = V_i / \sum V_j$.
+3. **Mass** — trust the vision prior inside $[M_{\min}, M_{\max}]$,
+   otherwise fall back to a plate-density model:
+   $M_i = M_{\text{ref,plate}} \times \omega_i \times \rho_i / \bar{\rho}$
+   with $M_{\text{ref,plate}} = 450$ g.
+4. **Macros** — $E = \sum M_i C_i$ using per-category density tables.
+
+Recommendation radius (for drawing the "eat this much" circle):
+
+$$
+R_{\text{rec}} = \frac{\min(w, h)}{2} \times \sqrt{k_{\text{keep}}}
+$$
+
+---
 
 ## Algorithm II — HFS dual-constraint recommendation (`src/hfs.ts`)
 
@@ -187,29 +210,6 @@ $$
 
 ---
 
-## Algorithm I — plate geometry estimation (`src/geometry.ts`)
-
-When a vision model supplies bounding boxes (and optionally a rough mass
-prior), the plate is reconstructed geometrically:
-
-1. **Projection area** — each component's bbox area ratio to the plate:
-   $\text{AreaRatio}_i = \text{Area}_i / \text{Area}_{\text{plate}}$.
-2. **Volume score** — $V_i = K_i \times \text{AreaRatio}_i \times H_i$
-   (per-category form factor × area × height), normalized to shares
-   $\omega_i = V_i / \sum V_j$.
-3. **Mass** — trust the vision prior inside $[M_{\min}, M_{\max}]$,
-   otherwise fall back to a plate-density model:
-   $M_i = M_{\text{ref,plate}} \times \omega_i \times \rho_i / \bar{\rho}$
-   with $M_{\text{ref,plate}} = 450$ g.
-4. **Macros** — $E = \sum M_i C_i$ using per-category density tables.
-
-Recommendation radius (for drawing the "eat this much" circle):
-
-$$
-R_{\text{rec}} = \frac{\min(w, h)}{2} \times \sqrt{k_{\text{keep}}}
-$$
-
----
 
 ## Quick start
 
