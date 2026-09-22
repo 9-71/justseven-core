@@ -1,6 +1,6 @@
 # justseven-core
 
-A **dependency-free, pure TypeScript, production-derived dietary recommendation core** extracted, de-identified, and rewritten from [七分饱](https://github.com/9-71/justseven-app). It exposes reusable, testable algorithms; it is not the complete application source.
+A **dependency-free, pure TypeScript, production-derived dietary recommendation core** extracted, de-identified, and rewritten from [justseven-app](https://github.com/9-71/justseven-app). It exposes reusable, testable algorithms; it is not the complete application source.
 
 The package has no runtime dependencies. It accepts plain data and does not depend on `wx.*`, cloud services, or the DOM.
 
@@ -15,9 +15,9 @@ Recommending how much of a meal to eat is a control problem. A useful suggestion
 
 The caller composes these algorithms with its own meal data and application workflow.
 
-## Relationship to 七分饱
+## Relationship to justseven-app
 
-[七分饱](https://github.com/9-71/justseven-app) is the main WeChat Mini Program, with application UI, meal recording and interaction flows, cloud persistence, and AI-assisted meal analysis. This repository publishes only a reusable algorithm core derived from that work. Mini Program UI, `wx.*` and cloud integrations, DOM code, production food data, and application-level logic are excluded. The six dishes in `mockFoodData` are illustrative test and demo data, not a production database.
+[justseven-app](https://github.com/9-71/justseven-app) is the main WeChat Mini Program, with application UI, meal recording and interaction flows, cloud persistence, and AI-assisted meal analysis. This repository publishes only a reusable algorithm core derived from that work. Mini Program UI, `wx.*` and cloud integrations, DOM code, production food data, and application-level logic are excluded. The six dishes in `mockFoodData` are illustrative test and demo data, not a production database.
 
 ## Algorithm flow
 
@@ -114,7 +114,7 @@ uses plate energy, protein, fiber, and fat to return `rE`, `rH`, and `rBase`.
 it returns `keepById`, `reducedKcal`, `shortfallKcal`, and `capped`.
 
 $$
-r_H=\operatorname{Clip}\!\left(
+r_H=\mathrm{Clip}\!\left(
 \frac{HFS^*-\beta_0}{\beta_1E+\beta_2P+\beta_3F_b-\beta_4F_t},
 r_{\min},r_{\max}\right)
 $$
