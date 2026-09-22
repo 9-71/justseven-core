@@ -1,270 +1,199 @@
 # justseven-core
 
-A small, dependency-free TypeScript library of core dietary-intake algorithms —
-**BMR budgeting, fullness-regression portion advice, Bayesian adaptive
-calibration, and plate geometry estimation** — extracted from a production
-WeChat Mini Program and rewritten as a pure, testable, open-source package.
+A **dependency-free, pure TypeScript, production-derived dietary recommendation core** extracted, de-identified, and rewritten from [七分饱](https://github.com/9-71/justseven-app). It exposes reusable, testable algorithms; it is not the complete application source.
 
-> All `wx.*` / cloud / DOM dependencies were stripped. Every function is a pure
-> TypeScript function operating on plain data. Production food data was removed;
-> a lightweight `mockFoodData` (6 dishes) ships only to run the unit tests.
-
----
+The package has no runtime dependencies. It accepts plain data and does not depend on `wx.*`, cloud services, or the DOM.
 
 ## Why this library
 
-Recommending "how much of this plate to eat" well is a **control problem**, not
-a lookup problem. The system needs to answer four questions on every meal:
+Recommending how much of a meal to eat is a control problem. A useful suggestion depends on the meal, the person, and past feedback. The core addresses four questions:
 
-1. **How much energy should this meal deliver?** — an energy budget derived
-   from the user's basal metabolic rate.
-2. **Which macro composition keeps you full?** — a fullness regression that
-   scores a plate and rescales the portion to a "seven-tenths full" target.
-3. **What portion do I actually need to cut / keep?** — an iterative quota
-   allocator with category floors.
-4. **Is my recommendation actually matching reality?** — an adaptive layer that
-   watches the user's feedback and silently recalibrates the next advice.
+1. **Energy budget:** What is a reasonable target for this meal, based on BMR and a weight goal?
+2. **Fullness:** How do the meal's energy and macros relate to a target fullness score?
+3. **Portion allocation:** Which dishes should be reduced, while respecting category-specific floors?
+4. **Adaptation:** How should reported intake and satiety change a later recommendation?
 
-The four algorithms below answer these in order and compose into a closed
-loop: recommend → eat → report → recalibrate.
+The caller composes these algorithms with its own meal data and application workflow.
 
----
+## Relationship to 七分饱
 
-## Architecture
+[七分饱](https://github.com/9-71/justseven-app) is the main WeChat Mini Program, with application UI, meal recording and interaction flows, cloud persistence, and AI-assisted meal analysis. This repository publishes only a reusable algorithm core derived from that work. Mini Program UI, `wx.*` and cloud integrations, DOM code, production food data, and application-level logic are excluded. The six dishes in `mockFoodData` are illustrative test and demo data, not a production database.
 
-```
-                        ┌─────────────────────────────┐
-                        │  user profile (age/height/  │
-                        │  weight/gender/goal)        │
-                        └──────────────┬──────────────┘
-                                       ▼
-   ┌───────────────────────────────────────────────────────┐
-   │ Algorithm 0 — BMR & meal budget           (src/bmr.ts)│
-   │   BMR = Mifflin-St Jeor                               │
-   │   E_meal = BMR × G × μ_meal (band ±5%, cap 100 kcal)  │
-   └───────────────────────┬───────────────────────────────┘
-                           ▼ E_target
-   ┌───────────────────────────────────────────────────────┐
-   │ Algorithm I — plate geometry            (src/geometry)│
-   │   area ratios → volume scores → mass & macro totals   │
-   └───────────────────────┬───────────────────────────────┘
-                           ▼ E_total, macros
-   ┌───────────────────────────────────────────────────────┐
-   │ Algorithm II — HFS dual-constraint advice (src/hfs.ts)│
-   │   r_E (energy)   ┐                                    │
-   │   r_H (fullness) ┴─ fuse → r_base → flexible quota    │
-   └───────────────────────┬───────────────────────────────┘
-                           ▼ recommended portion / quota
-   ┌───────────────────────────────────────────────────────┐
-   │ Algorithm III — Bayesian recalibration (src/bayesian) │
-   │   Kalman update on θ_t = θ·(1 − λ·F_t)                │
-   └───────────────────────▲───────────────────────────────┘
-                           │ θ, F feedback
-                   user eats & reports
+## Algorithm flow
+
+```mermaid
+flowchart LR
+    A[Energy budget] --> B[Fullness estimate]
+    B --> C[Portion allocation]
+    C --> D[Recommendation]
+    D --> E[Meal feedback]
+    E --> F[Adaptive recalibration]
+    F -. next meal .-> A
 ```
 
-Optional companions (kept out of the core loop):
+The exports cover BMR and meal targets (`bmr`), fullness regression and portion quotas (`hfs`), optional plate geometry and macro estimation (`geometry`), and Bayesian feedback calibration (`bayesian`). Dialog, pet-state, and feedback-turn helpers are also exported. There is no single exported function that runs the whole diagram; the caller supplies inputs, chooses the target, and persists calibration state.
 
-| Module | Purpose |
-|---|---|
-| `src/dialog.ts` | Turn-taking state machine + colloquial Chinese slot extraction |
-| `src/pet.ts` | Streak / EXP / shield-card settlement for gamification |
-| `src/pipeline.ts` | `runFeedbackTurn` — orchestrates dialog → calibration → pet |
-| `src/mock.ts` | 6-dish `mockFoodData` for tests & the simulation demo |
-
----
-
-## Algorithm 0 — BMR and the meal budget (`src/bmr.ts`)
-
-**Mifflin-St Jeor:**
-
-$$
-\text{BMR}_m = 10\,w + 6.25\,h - 5\,a + 5 \qquad
-\text{BMR}_f = 10\,w + 6.25\,h - 5\,a - 161
-$$
-
-The meal target applies a weight-goal factor $G$ and a per-meal budget ratio
-$\mu_m = 0.32$, then the "seven-tenths full" eating target $\mu_\text{sf} = 0.7$:
-
-$$
-E_{\text{target}} = \mathrm{round}\!\left(\text{BMR} \times G \times \mu_m\right),
-\qquad G \in \{0.85\,(\text{lose}),\ 1.0\,(\text{maintain}),\ 1.15\,(\text{gain})\}
-$$
-
-An elastic band $E_{\text{target}} \times (1 \pm 0.05)$ tolerates plate
-variability; the band span is capped at 100 kcal so extreme BMRs do not
-produce unusably wide recommendations.
-
----
-## Algorithm I — plate geometry estimation (`src/geometry.ts`)
-
-When a vision model supplies bounding boxes (and optionally a rough mass
-prior), the plate is reconstructed geometrically:
-
-1. **Projection area** — each component's bbox area ratio to the plate: $\text{AreaRatio}\_i = \text{Area}\_i / \text{Area}\_{\text{plate}}$.
-2. **Volume score** — $V_i = K_i \times \text{AreaRatio}_i \times H_i$
-   (per-category form factor × area × height), normalized to shares
-   $\omega_i = V_i / \sum V_j$.
-3. **Mass** — trust the vision prior inside $[M_{\min}, M_{\max}]$,
-   otherwise fall back to a plate-density model:
-   $M_i = M_{\text{ref,plate}} \times \omega_i \times \rho_i / \bar{\rho}$
-   with $M_{\text{ref,plate}} = 450$ g.
-4. **Macros** — $E = \sum M_i C_i$ using per-category density tables.
-
-Recommendation radius (for drawing the "eat this much" circle):
-
-$$
-R_{\text{rec}} = \frac{\min(w, h)}{2} \times \sqrt{k_{\text{keep}}}
-$$
-
----
-
-## Algorithm II — HFS dual-constraint recommendation (`src/hfs.ts`)
-
-### Fullness regression
-
-A linear model scores the plate's macros (Calories $C$, Protein $P$, Fiber
-$F_b$, Fat $F_t$):
-
-$$
-\hat{\text{HFS}} = \beta_0 + \beta_1 C + \beta_2 P + \beta_3 F_b - \beta_4 F_t
-$$
-
-### Dual constraints
-
-The portion ratio must satisfy **both** constraints — hit the energy target
-*and* land at the seven-tenths-full scale point ($\text{HFS}^* = 7$):
-
-$$
-r_E = \frac{E_{\text{target},t}}{E_{\text{total}}},
-\qquad
-r_H = \mathrm{Clip}\!\left(
-  \frac{\text{HFS}^* - \beta_0}{\beta_1 C + \beta_2 P + \beta_3 F_b - \beta_4 F_t},
-  \; r_{\min},\; r_{\max}
-\right)
-$$
-
-Fused with a blending weight $\alpha$ (default 0.5):
-
-$$
-r_{\text{base}} = (1 - \alpha)\, r_E + \alpha\, r_H
-$$
-
-### Dynamic target correction
-
-The system adapts the *target itself* when recent reported fullness $\bar{\text{HFS}}$
-drifts from $\text{HFS}^*$:
-
-$$
-E_{\text{target},t} = \mathrm{Clip}\!\left(
-  E_{\text{base},m} \times \left[1 + \omega \frac{\text{HFS}^* - \bar{\text{HFS}}}{\sigma_{\text{HFS}} + \varepsilon}\right],
-  \; E_{\min},\; E_{\max}
-\right)
-$$
-
-### Flexible quota allocation
-
-`allocateFlexibleQuota` walks the dish list and iteratively cuts portions
-(≤ 6 passes) toward $r_{\text{base}}$, always stopping at per-category floor
-ratios (e.g. staples at 0.5, fried food at 0.3). Result: `keepById` multipliers
-per dish, calories reduced, and an explicit shortfall when even all floors are
-reached — the caller can decide how to handle the remainder.
-
----
-
-## Algorithm III — Bayesian adaptive calibration (`src/bayesian.ts`)
-
-The calibrated intake ratio $c$ is the hidden state. Each meal is an
-**observation of the state contaminated by satiety feedback**:
-
-$$
-y_t = \theta_t \times (1 - \lambda\, F_t), \qquad
-\lambda = 0.08,\quad F_t \in \{-1, 0, +1\}
-$$
-
-$\theta_t$ is the reported intake ratio and $F_t$ the satiety class. A normal-
-normal (Kalman) filter maintains the posterior:
-
-$$
-K = \frac{s^2}{s^2 + \tau^2},
-\qquad
-m' = m + K\,(y - m),
-\qquad
-s'^2 = (1 - K)\, s^2
-$$
-
-Prior $c_0 \sim \mathcal{N}(1.0,\ 0.25)$. The posterior mean is clipped to
-$[c_{\min}, c_{\max}] = [0.8, 1.2]$ and the **direction verdict** (up / hold /
-down) gets a ±0.05 hysteresis band so small noisy swings do not churn the
-advice. The factor is applied multiplicatively to the recommendation:
-
-$$
-r_{\text{rec}} = c \times r_{\text{base}},\qquad
-c = \mathrm{Clip}(m,\ c_{\min},\ c_{\max})
-$$
-
-> **Why Bayesian?** A naive moving average over-reacts to single meals and
-> cannot express "how sure we are". The Kalman gain $K \to 0$ as evidence
-> accumulates: the filter converges while remaining responsive early on.
-
----
-
-
-## Quick start
+## Quick Start
 
 ```bash
-npm install
-npm test          # Vitest: 94 unit tests
-npm run demo      # 7-day simulated feedback loop (terminal colors if TTY)
-npm run build     # tsc → dist/ (ES2020, CommonJS, strict)
+npm ci
+npm run build
+npm test
+npm run demo
 ```
 
-The demo simulates a user whose true intake ratio is 1.1 while the system
-starts from 1.0, feeds curated daily feedback (including an over-eating day
-with a shield card), and prints the convergence of the calibration factor.
+`npm run build` compiles the TypeScript library to `dist/` with declarations. `npm run demo` runs the included feedback simulation. From the repository root, import the public source entry point as shown below. An installed package can instead be imported as `justseven-core`.
 
----
+```ts
+import {
+  calcBMR,
+  computeMealBudget,
+  computeRecommendedRatio,
+  allocateFlexibleQuota,
+  createInitialState,
+  calibrateAfterMeal,
+  applyCalibration
+} from './src';
+import type { MacroSummary, QuotaInput } from './src';
 
-## Hyperparameters & calibration
+const bmr = calcBMR({ gender: 'male', age: 28, height: 175, weight: 70 });
+const targetKcal = computeMealBudget(bmr, 'maintain');
 
-All tuning knobs are exported as **configurable interfaces** with documented
-placeholder defaults — production values were deliberately not shipped:
+// Supply whole-meal macros and per-dish energy from your own data source.
+const macros: MacroSummary = { totalKcal: 900, proteinG: 35, fiberG: 8, fatG: 28 };
+const items: QuotaInput[] = [
+  { id: 'rice', kcal: 300, category: 'carb' },
+  { id: 'chicken', kcal: 200, category: 'protein' },
+  { id: 'fried', kcal: 400, category: 'fried' }
+];
 
-| Config | Default | Meaning |
-|---|---|---|
-| `HfsConfig.betas` | `[3.0, 0.003, 0.05, 0.08, 0.03]` | Fullness regression β₀…β₄ |
-| `HfsConfig.hfsStar` | `7` | Seven-tenths-full scale point |
-| `HfsConfig.correctionOmega` | `0.1` | Dynamic-target sensitivity |
-| `HfsConfig.fusionAlpha` | `0.5` | Energy/fullness blend weight |
-| `HfsConfig.rMin / rMax` | `0.3 / 1.3` | Portion ratio clipping |
-| `BayesianConfig.lambda` | `0.08` | Satiety sensitivity on observations |
-| `BayesianConfig.tauSq` | `0.2` | Kalman measurement noise |
-| `BayesianConfig.cMin / cMax` | `0.8 / 1.2` | Posterior clipping |
+const { rBase } = computeRecommendedRatio(targetKcal, macros.totalKcal, macros);
+const quota = allocateFlexibleQuota(items, Math.min(rBase, 1) * macros.totalKcal);
+const currentKeep = quota.keepById.rice;
 
-Pass a partial config to any entry point; it deep-merges over the default
-(`resolveHfsConfig`, `resolveBayesianConfig`). Re-fit `betas` on your own
-satiation survey; tune `tauSq` to match the noise of your measurement channel.
+// After this meal, retain the returned state for the next feedback update.
+const updated = calibrateAfterMeal(
+  createInitialState(),
+  { theta: 1.1, F: 0, recordedAt: Date.now() }
+);
+const nextKeep = applyCalibration(currentKeep, updated.result.factor);
+```
 
----
+`theta` is actual intake divided by the recommended amount; `F` is `-1` (not full), `0` (target fullness), or `1` (too full). `nextKeep` illustrates how the new factor can adjust a later recommendation for the same dish. Real applications must store `updated.state` and pass it into the next `calibrateAfterMeal` call. `allocateFlexibleQuota` accepts an energy target; the example derives one from the fused energy/fullness ratio. It can report `shortfallKcal` if category floors prevent the requested reduction.
+
+## Algorithms
+
+### BMR and meal budget
+
+**Problem:** Establish a meal energy reference from a person's profile.
+
+**Input → output:** `calcBMR` takes gender, age (years), height (cm), and weight
+(kg), returning kcal/day. `computeMealBudget(bmr, goal)` returns kcal for `lose`, `maintain`, or `gain`.
+
+$$
+\mathrm{BMR}=10w+6.25h-5a+s,\qquad s=5\ (\text{male}),\ -161\ (\text{female})
+$$
+
+$$
+E_{\mathrm{base},m}=\mathrm{BMR}\times G\times\mu_m,
+\qquad \mu_m=0.32\ \text{by default}
+$$
+
+`G` defaults to 0.85, 1.0, or 1.15 for the three goals. Two **distinct target
+policies** are available: `computeMealCalorieBaseline` returns a 0.7-scaled
+target; `computeMealTargetBand` returns a goal-adjusted target with a ±5% band
+capped at 100 kcal total width. The caller chooses the policy.
+
+### HFS dual-constraint recommendation
+
+**Problem:** Balance energy and fullness, then assign per-dish keep ratios.
+
+**Input → output:** `computeRecommendedRatio(targetKcal, totalKcal, macros)`
+uses plate energy, protein, fiber, and fat to return `rE`, `rH`, and `rBase`.
+`allocateFlexibleQuota(items, targetKcal)` takes dish IDs, kcal, and categories;
+it returns `keepById`, `reducedKcal`, `shortfallKcal`, and `capped`.
+
+$$
+r_H=\operatorname{Clip}\!\left(
+\frac{HFS^*-\beta_0}{\beta_1E+\beta_2P+\beta_3F_b-\beta_4F_t},
+r_{\min},r_{\max}\right)
+$$
+
+$$
+r_{\mathrm{base}}=(1-\alpha)r_E+\alpha r_H,
+\qquad r_E=E_{\mathrm{target}}/E_{\mathrm{total}}
+$$
+
+The fullness term is a linear macro regression; defaults are `HFS* = 7` and
+`α = 0.5`. The allocator cuts toward the **caller-supplied energy target**,
+weighting dishes by kcal and category cut pressure. It redistributes cuts at
+category floors and reports any shortfall. `computeDynamicTarget` can adjust a later target from recent fullness scores.
+
+### Bayesian adaptive calibration
+
+**Problem:** Adjust later advice from feedback without overreacting to one meal.
+
+**Input → output:** `calibrateAfterMeal(state, feedback)` accepts a
+`CalibrationState` and `{ theta, F, recordedAt? }`; it returns the updated
+state, observation, gain, and result. `applyCalibration` scales a later ratio.
+
+$$
+y_t=\theta_t(1-\lambda F_t),\qquad F_t\in\{-1,0,+1\}
+$$
+
+$$
+K_t=\frac{s_t^2}{s_t^2+\tau^2},\qquad
+m_{t+1}=m_t+K_t(y_t-m_t),\qquad
+s_{t+1}^2=(1-K_t)s_t^2
+$$
+
+Here `theta` is actual intake divided by the recommendation. The posterior
+mean supplies a bounded factor; variance shrinks as feedback accumulates.
+The default factor is clipped to `[0.8, 1.2]`. A ±0.05 hysteresis band stabilizes
+the `up`/`hold`/`down` verdict. Store the state outside this library.
+
+### Plate geometry estimation
+
+**Problem:** Estimate component masses and macros when weights are unavailable.
+
+**Input → output:** `estimateMasses` takes category, normalized bounding box,
+and optional mass prior per component; it returns masses with a `vlm` or
+`density` source and volume shares. `estimateMacros` returns kcal, protein, fiber, and fat from category and mass.
+
+$$
+V_i=K_i\,A_i\,H_i,\qquad \omega_i=V_i/\sum_jV_j
+$$
+
+$$
+M_i=M_{\mathrm{ref}}\,\omega_i\,\rho_i/\bar\rho
+$$
+
+`A_i` is area share; category form factors supply `K_i`, `H_i`, and density
+`ρ_i`. A mass prior in `[50, 500]` g is used directly; otherwise the fallback
+uses a 450 g reference plate. Densities are illustrative. Image recognition
+and rendering remain outside this package.
+
+### Hyperparameters and configuration
+
+| Setting | Shipped default | Role |
+| --- | --- | --- |
+| `HfsConfig.betas` | `3.0, 0.003, 0.05, 0.08, 0.03` | Fullness regression coefficients |
+| `HfsConfig.hfsStar / fusionAlpha` | `7 / 0.5` | Fullness target and energy/fullness blend |
+| `HfsConfig.rMin / rMax` | `0.3 / 1.3` | Fullness-ratio bounds |
+| `HfsConfig.tiers` | Category-specific | Cut pressure and minimum keep ratio |
+| `BayesianConfig.lambda / tauSq` | `0.08 / 0.2` | Satiety adjustment and observation noise |
+| `BayesianConfig.cMin / cMax` | `0.8 / 1.2` | Calibration-factor bounds |
+
+`resolveHfsConfig` and `resolveBayesianConfig` supply optional defaults; each API
+accepts its own options. Shipped coefficients, densities, and calibration settings are illustrative:
+fit and validate them for your deployment.
+
+## Testing
+
+`npm test` runs Vitest. The current suite has **94 tests in six files**, covering BMR and meal budgets, fullness and quota allocation, Bayesian feedback, geometry, feedback/dialog and pet-state behavior, and mock data. `npm run build` checks the library's TypeScript compilation. Tests use the included mock data; they do not exercise the SevenFull application or its cloud services.
+
+This library does not provide medical or clinical nutrition advice.
 
 ## License
 
-Copyright (c) 2026 JustSeven Team. This project is released under the
-[Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/)
-license — see [LICENSE](./LICENSE) for the full legal text.
-
-**Allowed** — no further permission needed:
-
-- Academic research, teaching, and learning
-- Personal or non-commercial evaluation, experimentation, and development
-- Non-commercial redistribution with attribution
-
-**Strictly prohibited**:
-
-- Any commercial use — selling, SaaS hosting, or embedding this library in a
-  paid product
-- Enterprise integration or use within a for-profit organization's services
-- For-profit derivative works or commercial services built on this library
-
-Commercial use requires a separate commercial license — please contact the
-authors to obtain one.
+Released under [CC BY-NC 4.0](./LICENSE). Commercial use requires a separate license from the authors.
